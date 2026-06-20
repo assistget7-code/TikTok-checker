@@ -4,7 +4,13 @@ import time
 import requests
 import os
 
-TIKTOK_LOGIN_URL = "https://www.tiktok.com/api/v1/auth/email/login/"
+# Multiple endpoints to try (TikTok changes these frequently)
+ENDPOINTS = [
+    "https://www.tiktok.com/api/v1/auth/email/login/",
+    "https://api16-normal-c-useast1a.tiktokv.com/passport/web/email/login/",
+    "https://api.tiktokv.com/passport/web/email/login/",
+    "https://www.tiktok.com/passport/web/email/login/",
+]
 
 def check_credentials(email: str, password: str) -> dict:
     device_id = str(random.randint(7250000000000000000, 7350000000000000000))
@@ -21,6 +27,7 @@ def check_credentials(email: str, password: str) -> dict:
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
+        "X-Requested-With": "XMLHttpRequest",
     }
 
     params = {
@@ -47,67 +54,62 @@ def check_credentials(email: str, password: str) -> dict:
         "account_sdk_source": "app",
     }
 
-    for attempt in range(2):
-        try:
-            resp = requests.post(
-                TIKTOK_LOGIN_URL,
-                headers=headers,
-                params=params,
-                data=payload,
-                timeout=20,
-            )
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                error_code = data.get("error_code", -1)
+    # Try each endpoint
+    for endpoint in ENDPOINTS:
+        for attempt in range(2):
+            try:
+                print(f"Trying endpoint: {endpoint}")
+                resp = requests.post(
+                    endpoint,
+                    headers=headers,
+                    params=params,
+                    data=payload,
+                    timeout=20,
+                )
                 
-                if error_code == 0:
-                    return {
-                        "success": True,
-                        "status": "valid",
-                        "message": "Credentials are valid",
-                        "account": {"username": email}
-                    }
-                elif error_code == 1102:
-                    return {
-                        "success": False,
-                        "status": "bad_password",
-                        "message": "Incorrect password"
-                    }
+                print(f"Status code: {resp.status_code}")
+                print(f"Response: {resp.text[:200]}")  # Log first 200 chars
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    error_code = data.get("error_code", -1)
+                    
+                    if error_code == 0:
+                        return {
+                            "success": True,
+                            "status": "valid",
+                            "message": "Credentials are valid",
+                            "account": {"username": email}
+                        }
+                    elif error_code == 1102:
+                        return {
+                            "success": False,
+                            "status": "bad_password",
+                            "message": "Incorrect password"
+                        }
+                    elif error_code in [1105, 1106]:
+                        return {
+                            "success": False,
+                            "status": "rate_limited",
+                            "message": "Too many attempts. Please try again later."
+                        }
+                    else:
+                        # Continue to next endpoint if this one failed
+                        break
                 else:
-                    return {
-                        "success": False,
-                        "status": "error",
-                        "message": f"TikTok error code: {error_code}"
-                    }
-            else:
-                if attempt == 0:
-                    time.sleep(1)
-                    continue
-                return {
-                    "success": False,
-                    "status": "error",
-                    "message": f"HTTP error: {resp.status_code}"
-                }
-                
-        except requests.exceptions.Timeout:
-            if attempt == 0:
-                time.sleep(1)
+                    # Continue to next endpoint
+                    break
+                    
+            except requests.exceptions.Timeout:
+                print(f"Timeout on {endpoint}")
                 continue
-            return {
-                "success": False,
-                "status": "timeout",
-                "message": "Request timed out. TikTok may be blocking the request."
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "status": "error",
-                "message": f"Network error: {str(e)}"
-            }
+            except Exception as e:
+                print(f"Error on {endpoint}: {str(e)}")
+                continue
     
+    # If all endpoints fail
     return {
         "success": False,
         "status": "error",
-        "message": "All attempts failed"
+        "message": "Unable to verify credentials. TikTok's API may have changed or is blocking requests."
     }
