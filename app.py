@@ -1,4 +1,8 @@
 import os
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
+
+# ... rest of your code
+import os
 import json
 import functools
 from datetime import datetime
