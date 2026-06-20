@@ -1,4 +1,4 @@
 import os
 
-PLAYWRIGHT_BROWSERS_PATH = "/opt/buildhome/.cache/ms-playwright"
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
+# Tell Playwright where to find the browser
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
