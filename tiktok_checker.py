@@ -1,115 +1,85 @@
-import hashlib
-import random
-import time
-import requests
+import asyncio
 import os
+from playwright.async_api import async_playwright
 
-# Multiple endpoints to try (TikTok changes these frequently)
-ENDPOINTS = [
-    "https://www.tiktok.com/api/v1/auth/email/login/",
-    "https://api16-normal-c-useast1a.tiktokv.com/passport/web/email/login/",
-    "https://api.tiktokv.com/passport/web/email/login/",
-    "https://www.tiktok.com/passport/web/email/login/",
-]
-
+# This runs the async function in a sync context for Flask
 def check_credentials(email: str, password: str) -> dict:
-    device_id = str(random.randint(7250000000000000000, 7350000000000000000))
-    install_id = str(random.randint(100000000000, 999999999999))
+    try:
+        return asyncio.run(_check_credentials_async(email, password))
+    except RuntimeError:
+        # If running in an event loop already
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_check_credentials_async(email, password))
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Origin": "https://www.tiktok.com",
-        "Referer": "https://www.tiktok.com/login/email",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-
-    params = {
-        "device_id": device_id,
-        "iid": install_id,
-        "device_type": "Pixel+4",
-        "os_version": "29",
-        "app_name": "musical_ly",
-        "app_version": "22.9.5",
-        "version_code": "220905",
-        "language": "en",
-        "region": "US",
-        "sys_region": "US",
-        "carrier_region": "US",
-        "ts": str(int(time.time())),
-    }
-
-    pw_md5 = hashlib.md5(password.encode("utf-8")).hexdigest()
-    
-    payload = {
-        "email": email,
-        "password": pw_md5,
-        "mix_mode": "1",
-        "account_sdk_source": "app",
-    }
-
-    # Try each endpoint
-    for endpoint in ENDPOINTS:
-        for attempt in range(2):
-            try:
-                print(f"Trying endpoint: {endpoint}")
-                resp = requests.post(
-                    endpoint,
-                    headers=headers,
-                    params=params,
-                    data=payload,
-                    timeout=20,
-                )
-                
-                print(f"Status code: {resp.status_code}")
-                print(f"Response: {resp.text[:200]}")  # Log first 200 chars
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    error_code = data.get("error_code", -1)
-                    
-                    if error_code == 0:
-                        return {
-                            "success": True,
-                            "status": "valid",
-                            "message": "Credentials are valid",
-                            "account": {"username": email}
-                        }
-                    elif error_code == 1102:
-                        return {
-                            "success": False,
-                            "status": "bad_password",
-                            "message": "Incorrect password"
-                        }
-                    elif error_code in [1105, 1106]:
-                        return {
-                            "success": False,
-                            "status": "rate_limited",
-                            "message": "Too many attempts. Please try again later."
-                        }
-                    else:
-                        # Continue to next endpoint if this one failed
-                        break
+async def _check_credentials_async(email: str, password: str) -> dict:
+    async with async_playwright() as p:
+        # Launch browser in headless mode (no UI)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox']
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
+        
+        try:
+            # Go to TikTok login page
+            await page.goto("https://www.tiktok.com/login/email", timeout=30000)
+            
+            # Wait for the page to load
+            await page.wait_for_load_state("networkidle")
+            
+            # Fill in email
+            await page.fill('input[type="email"]', email)
+            
+            # Fill in password
+            await page.fill('input[type="password"]', password)
+            
+            # Click login button
+            await page.click('button[type="submit"]')
+            
+            # Wait for response (5-10 seconds)
+            await page.wait_for_timeout(8000)
+            
+            # Check current URL to determine login status
+            current_url = page.url
+            
+            if "feed" in current_url or "following" in current_url or "user" in current_url:
+                return {
+                    "success": True,
+                    "status": "valid",
+                    "message": "Credentials are valid",
+                    "account": {"username": email}
+                }
+            else:
+                # Check for error messages on the page
+                error_text = await page.text_content('.error-message, .error, [class*="error"]')
+                if error_text and "password" in error_text.lower():
+                    return {
+                        "success": False,
+                        "status": "bad_password",
+                        "message": "Incorrect password"
+                    }
+                elif error_text and "captcha" in error_text.lower():
+                    return {
+                        "success": False,
+                        "status": "captcha_required",
+                        "message": "CAPTCHA required. Please try again later."
+                    }
                 else:
-                    # Continue to next endpoint
-                    break
-                    
-            except requests.exceptions.Timeout:
-                print(f"Timeout on {endpoint}")
-                continue
-            except Exception as e:
-                print(f"Error on {endpoint}: {str(e)}")
-                continue
-    
-    # If all endpoints fail
-    return {
-        "success": False,
-        "status": "error",
-        "message": "Unable to verify credentials. TikTok's API may have changed or is blocking requests."
-    }
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "message": "Login failed. TikTok may have blocked this request."
+                    }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "status": "error",
+                "message": f"Error: {str(e)[:100]}"
+            }
+        finally:
+            await browser.close()
