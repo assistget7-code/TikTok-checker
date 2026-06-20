@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tiktok-checker
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install chromium
+    startCommand: gunicorn app:app
+    envVars:
+      - key: ADMIN_PASSWORD
+        value: admin123
+      - key: SESSION_SECRET
+        value: dev-secret-key
+      - key: PYTHON_VERSION
+        value: 3.11.0
